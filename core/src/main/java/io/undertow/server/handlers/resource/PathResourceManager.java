@@ -25,6 +25,8 @@ import java.util.TreeSet;
  */
 public class PathResourceManager implements ResourceManager  {
 
+    private static final boolean CHANGE_LISTENERS_ALLOWED = !Boolean.getBoolean("io.undertow.disable-file-system-watcher");
+
     private final List<ResourceChangeListener> listeners = new ArrayList<>();
 
     private FileSystemWatcher fileSystemWatcher;
@@ -169,38 +171,42 @@ public class PathResourceManager implements ResourceManager  {
 
     @Override
     public boolean isResourceChangeListenerSupported() {
-        return true;
+        return CHANGE_LISTENERS_ALLOWED;
     }
 
     @Override
     public synchronized void registerResourceChangeListener(ResourceChangeListener listener) {
-        listeners.add(listener);
-        if (fileSystemWatcher == null) {
-            fileSystemWatcher = Xnio.getInstance().createFileSystemWatcher("Watcher for " + base, OptionMap.EMPTY);
-            fileSystemWatcher.watchPath(new File(base), new FileChangeCallback() {
-                @Override
-                public void handleChanges(Collection<FileChangeEvent> changes) {
-                    synchronized (PathResourceManager.this) {
-                        final List<ResourceChangeEvent> events = new ArrayList<>();
-                        for (FileChangeEvent change : changes) {
-                            if (change.getFile().getAbsolutePath().startsWith(base)) {
-                                String path = change.getFile().getAbsolutePath().substring(base.length());
-                                events.add(new ResourceChangeEvent(path, ResourceChangeEvent.Type.valueOf(change.getType().name())));
+        if(CHANGE_LISTENERS_ALLOWED) {
+            listeners.add(listener);
+            if (fileSystemWatcher == null) {
+                fileSystemWatcher = Xnio.getInstance().createFileSystemWatcher("Watcher for " + base, OptionMap.EMPTY);
+                fileSystemWatcher.watchPath(new File(base), new FileChangeCallback() {
+                    @Override
+                    public void handleChanges(Collection<FileChangeEvent> changes) {
+                        synchronized (PathResourceManager.this) {
+                            final List<ResourceChangeEvent> events = new ArrayList<>();
+                            for (FileChangeEvent change : changes) {
+                                if (change.getFile().getAbsolutePath().startsWith(base)) {
+                                    String path = change.getFile().getAbsolutePath().substring(base.length());
+                                    events.add(new ResourceChangeEvent(path, ResourceChangeEvent.Type.valueOf(change.getType().name())));
+                                }
+                            }
+                            for (ResourceChangeListener listener : listeners) {
+                                listener.handleChanges(events);
                             }
                         }
-                        for (ResourceChangeListener listener : listeners) {
-                            listener.handleChanges(events);
-                        }
                     }
-                }
-            });
+                });
+            }
         }
     }
 
 
     @Override
     public synchronized void removeResourceChangeListener(ResourceChangeListener listener) {
-        listeners.remove(listener);
+        if(CHANGE_LISTENERS_ALLOWED) {
+            listeners.remove(listener);
+        }
     }
 
     public long getTransferMinSize() {
